@@ -77,6 +77,16 @@ def plex_client() -> client_module.PlexClient:
     )
 
 
+def test_client_normalizes_trailing_slash() -> None:
+    client = client_module.PlexClient(
+        logger=cast(ProviderLogger, getLogger("test.client")),
+        url="https://plex.example/",
+        token="token",
+    )
+
+    assert client._url == "https://plex.example"
+
+
 @pytest.mark.asyncio
 async def test_initialize_populates_state_and_sections(
     monkeypatch: pytest.MonkeyPatch, plex_client: client_module.PlexClient

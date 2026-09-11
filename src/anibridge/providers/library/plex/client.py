@@ -67,7 +67,7 @@ class PlexClient:
         """
         self.log = logger
 
-        self._url = url
+        self._url = url.rstrip("/")
         self._token = token
         self._home_user = home_user
         self._section_filter = {value.lower() for value in section_filter or ()}
