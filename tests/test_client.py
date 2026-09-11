@@ -20,18 +20,51 @@ def _account_stub(**kwargs: Any) -> client_module.MyPlexAccount:
     return cast(client_module.MyPlexAccount, SimpleNamespace(**kwargs))
 
 
-def _session_stub(machine_id: str = "machine-1") -> Any:
+def _session_stub(machine_id: str | None = "machine-1") -> Any:
     class StubResponse:
         def __init__(self) -> None:
-            self.content = (
-                f'<MediaContainer machineIdentifier="{machine_id}"/>'.encode()
+            machine_id_attr = (
+                f' machineIdentifier="{machine_id}"' if machine_id else ""
             )
+            self.content = f"<MediaContainer{machine_id_attr}/>".encode()
 
     class StubSession:
         def get(self, _url: str, timeout: int = 10):
             return StubResponse()
 
     return StubSession()
+
+
+def test_initialize_uses_connected_server_machine_id_when_identity_omits_it(
+    monkeypatch: pytest.MonkeyPatch, plex_client: client_module.PlexClient
+):
+    """The connected server should supply an ID absent from /identity."""
+    resource = SimpleNamespace(
+        clientIdentifier="machine-1", accessToken="resource-token"
+    )
+    account = _account_stub(
+        id=1,
+        username="demo",
+        email="demo@example",
+        title="Demo",
+        friendlyName="demo",
+        resources=lambda: [resource],
+    )
+
+    class StubPlexServer:
+        def __init__(self, *_args, **kwargs) -> None:
+            self.machineIdentifier = "machine-1"
+            self.token = kwargs["token"]
+
+    session = _session_stub(None)
+    monkeypatch.setattr(client_module.requests, "Session", lambda: session)
+    monkeypatch.setattr(client_module, "SelectiveVerifySession", lambda **_: session)
+    monkeypatch.setattr(client_module, "MyPlexAccount", lambda **_: account)
+    monkeypatch.setattr(client_module, "PlexServer", StubPlexServer)
+
+    user_client, *_ = plex_client._initialize_clients()
+
+    assert cast(Any, user_client).token == "resource-token"
 
 
 @pytest.fixture()
@@ -72,7 +105,9 @@ async def test_initialize_populates_state_and_sections(
         friendlyName="demo",
         users=lambda: [],
         user=lambda _name: SimpleNamespace(id=1),
-        resource=lambda _machine_id: SimpleNamespace(accessToken="token"),
+        resources=lambda: [
+            SimpleNamespace(clientIdentifier="machine-1", accessToken="token")
+        ],
     )
 
     class StubPlexServer:
@@ -133,7 +168,11 @@ def test_initialize_switches_home_user_when_requested(monkeypatch: pytest.Monkey
         title="Child",
         friendlyName="child",
         users=lambda: [],
-        resource=lambda _machine_id: SimpleNamespace(accessToken="switched-token"),
+        resources=lambda: [
+            SimpleNamespace(
+                clientIdentifier="machine-1", accessToken="switched-token"
+            )
+        ],
     )
 
     def _user_lookup(name):

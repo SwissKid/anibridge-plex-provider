@@ -131,6 +131,15 @@ class PlexClient:
             self.log.error(f"Failed to parse Plex identity from {self._url}/identity")
             raise
 
+        if machine_id is None:
+            self.log.debug(
+                "Plex identity response omitted machineIdentifier; "
+                "connecting to resolve it"
+            )
+            machine_id = PlexServer(
+                self._url, token=self._token, session=session
+            ).machineIdentifier
+
         account = MyPlexAccount(token=self._token, session=session)
         user: MyPlexUser | None = None
         if self._home_user:
@@ -157,7 +166,16 @@ class PlexClient:
                         f"({account.id})"
                     )
 
-        user_token = account.resource(machine_id).accessToken
+        try:
+            user_token = next(
+                resource.accessToken
+                for resource in account.resources()
+                if resource.clientIdentifier == machine_id
+            )
+        except StopIteration as exc:
+            raise RuntimeError(
+                f"Plex server '{machine_id}' was not found in the account resources"
+            ) from exc
         user_client = PlexServer(self._url, token=user_token, session=session)
 
         display_name = (
