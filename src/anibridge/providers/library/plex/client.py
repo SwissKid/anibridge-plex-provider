@@ -131,14 +131,19 @@ class PlexClient:
             self.log.error(f"Failed to parse Plex identity from {self._url}/identity")
             raise
 
-        if machine_id is None:
+        if not machine_id:
             self.log.debug(
-                "Plex identity response omitted machineIdentifier; "
+                "Plex identity response has no machineIdentifier; "
                 "connecting to resolve it"
             )
             machine_id = PlexServer(
                 self._url, token=self._token, session=session
             ).machineIdentifier
+
+        if not machine_id:
+            raise RuntimeError(
+                "Plex identity response and connected server have no machineIdentifier"
+            )
 
         account = MyPlexAccount(token=self._token, session=session)
         user: MyPlexUser | None = None

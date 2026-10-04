@@ -4,6 +4,7 @@ from datetime import UTC, datetime, timedelta
 from logging import getLogger
 from types import SimpleNamespace
 from typing import Any, cast
+from unittest.mock import Mock
 
 import pytest
 from anibridge.utils.types import ProviderLogger
@@ -24,7 +25,7 @@ def _session_stub(machine_id: str | None = "machine-1") -> Any:
     class StubResponse:
         def __init__(self) -> None:
             machine_id_attr = (
-                f' machineIdentifier="{machine_id}"' if machine_id else ""
+                f' machineIdentifier="{machine_id}"' if machine_id is not None else ""
             )
             self.content = f"<MediaContainer{machine_id_attr}/>".encode()
 
@@ -35,8 +36,11 @@ def _session_stub(machine_id: str | None = "machine-1") -> Any:
     return StubSession()
 
 
+@pytest.mark.parametrize("machine_id", [None, ""])
 def test_initialize_uses_connected_server_machine_id_when_identity_omits_it(
-    monkeypatch: pytest.MonkeyPatch, plex_client: client_module.PlexClient
+    monkeypatch: pytest.MonkeyPatch,
+    plex_client: client_module.PlexClient,
+    machine_id: str | None,
 ):
     """The connected server should supply an ID absent from /identity."""
     resource = SimpleNamespace(
@@ -56,7 +60,7 @@ def test_initialize_uses_connected_server_machine_id_when_identity_omits_it(
             self.machineIdentifier = "machine-1"
             self.token = kwargs["token"]
 
-    session = _session_stub(None)
+    session = _session_stub(machine_id)
     monkeypatch.setattr(client_module.requests, "Session", lambda: session)
     monkeypatch.setattr(client_module, "SelectiveVerifySession", lambda **_: session)
     monkeypatch.setattr(client_module, "MyPlexAccount", lambda **_: account)
@@ -85,6 +89,46 @@ def test_client_normalizes_trailing_slash() -> None:
     )
 
     assert client._url == "https://plex.example"
+
+
+@pytest.mark.parametrize("suffix", ["", "/", "///"])
+def test_initialize_requests_normalized_identity_url(monkeypatch, suffix):
+    client = client_module.PlexClient(
+        logger=cast(ProviderLogger, getLogger("test.client")),
+        url=f"https://plex.example/plex{suffix}",
+        token="token",
+    )
+    session = Mock()
+    session.get.side_effect = RuntimeError("stop after identity request")
+    monkeypatch.setattr(client_module, "SelectiveVerifySession", lambda **_: session)
+
+    with pytest.raises(RuntimeError, match="stop after identity request"):
+        client._initialize_clients()
+
+    session.get.assert_called_once_with(
+        "https://plex.example/plex/identity", timeout=10
+    )
+
+
+@pytest.mark.parametrize("machine_id", [None, ""])
+@pytest.mark.parametrize("server_machine_id", [None, ""])
+def test_initialize_rejects_missing_machine_identifier(
+    monkeypatch, plex_client, machine_id, server_machine_id
+):
+    session = _session_stub(machine_id)
+    monkeypatch.setattr(client_module, "SelectiveVerifySession", lambda **_: session)
+    server = Mock(return_value=_server_stub(machineIdentifier=server_machine_id))
+    account = Mock()
+    monkeypatch.setattr(client_module, "PlexServer", server)
+    monkeypatch.setattr(client_module, "MyPlexAccount", account)
+
+    with pytest.raises(RuntimeError, match="machineIdentifier"):
+        plex_client._initialize_clients()
+
+    server.assert_called_once_with(
+        "https://plex.example", token="token", session=session
+    )
+    account.assert_not_called()
 
 
 @pytest.mark.asyncio
@@ -179,9 +223,7 @@ def test_initialize_switches_home_user_when_requested(monkeypatch: pytest.Monkey
         friendlyName="child",
         users=lambda: [],
         resources=lambda: [
-            SimpleNamespace(
-                clientIdentifier="machine-1", accessToken="switched-token"
-            )
+            SimpleNamespace(clientIdentifier="machine-1", accessToken="switched-token")
         ],
     )
 
